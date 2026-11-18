@@ -5,15 +5,22 @@ Java4Shell (CVE-2026-114938) exposure checker — DEFENSIVE / non-destructive.
 It does NOT send any exploit or malformed-Base64 payload. It answers two
 questions for YOUR OWN server:
 
-  REMOTE  : Does the endpoint actually parse an Authorization: Bearer token?
-            (i.e. is the "Spring decodes it even though I don't use it" path
-            reachable on a no-auth endpoint?)  -> attack-surface reachability.
-
+  REMOTE  : Does sending an Authorization: Bearer token CHANGE the response?
+            This is a weak, one-way signal and is NOT a vulnerability test.
   LOCAL   : Is the JVM build in range AND does the CPU have the AVX-512 flags
             the vulnerable Base64 intrinsic needs?  -> run on each host.
 
-A remote "Y" means: investigate/patch. It does NOT by itself prove RCE —
-that also needs the LOCAL conditions true on the host serving the URL.
+*** THE REMOTE PROBE IS NOT CONCLUSIVE. ***
+  - "Y" is conclusive: the token is provably being parsed.
+  - "N"/"UNKNOWN" proves NOTHING. A server can silently Base64-decode the
+    token -- reaching the exact vulnerable path -- and return an identical
+    response (the token is optional on an anonymous endpoint). That decode is
+    invisible from outside. N does not mean "safe"; it means "cannot tell".
+
+Do not wait on this probe. The correct action is to PATCH NOW (or apply the
+-XX:-UseBASE64Intrinsics stopgap) on every host running an in-range JDK, and
+confirm with --local + check_classpath.py. Remote reachability only tells you
+when you already know you have a problem.
 
 Dynamic Pix payloads re-sign themselves on every request (the body changes on
 its own), so body differences are NOT used as a signal. The probe takes a
@@ -106,21 +113,27 @@ def check_remote(url, samples=3):
         signals.append("body changed vs a stable baseline when the token was sent")
 
     if signals:
-        print("REACHABLE: Y  -- the Bearer-parsing path appears active:")
+        print("PARSED: Y  (CONCLUSIVE) -- the token is being parsed; it changed "
+              "the response:")
         for s in signals:
-            print(f"            - {s}")
-        print("          Verify the --local check on the host, then patch.")
+            print(f"          - {s}")
+        print("        The bearer decode path is reachable pre-auth. Run --local "
+              "on the host and patch.")
     elif not status_stable:
-        print("REACHABLE: ?  -- the no-token status itself varied "
-              f"{sorted(ctrl_statuses)}; result inconclusive.\n"
-              "          Re-run against a quieter target or raise --samples.")
+        print("PARSED: UNKNOWN -- the no-token status itself varied "
+              f"{sorted(ctrl_statuses)}, so even a change could not be trusted.\n"
+              "        Re-run against a quieter target or raise --samples.")
     else:
-        note = ("          (Body changes on its own, so it was ignored; verdict "
-                "is based on status + WWW-Authenticate.)\n") if body_volatile else ""
-        print("REACHABLE: N  -- status is unchanged and no bearer-auth header "
-              "appeared with the token.\n" + note +
-              "          This endpoint does not appear to parse the Authorization "
-              "header. Still patch the JDK — other inputs may decode Base64.")
+        note = ("        (Body changes on its own, so it was ignored.)\n"
+                if body_volatile else "")
+        print("PARSED: UNKNOWN -- identical response with and without the token.\n"
+              + note +
+              "        This does NOT mean the header is not parsed. A server can\n"
+              "        silently Base64-decode the token -- reaching the vulnerable\n"
+              "        path -- without changing its response (token optional on an\n"
+              "        anonymous endpoint). Only Y is conclusive; N/UNKNOWN proves\n"
+              "        nothing. Confirm on the host: --local  AND  check_classpath.py\n"
+              "        (is the Spring resource-server bearer filter present?).")
 
 
 def check_local():

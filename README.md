@@ -7,6 +7,22 @@ OpenJDK Base64-decoder RCE disclosed with Oracle's November 17 2026 CPU.
 > only harmless, well-formed input and inspect local files. They tell you
 > whether the **attack surface is present**, not how to attack it.
 
+## ⚠️ The remote probe is NOT a vulnerability test — patch now regardless
+
+The remote checks (`java4shell_check.py <url>`, `sweep.py`) are a **weak, one-way
+signal**, not a verdict:
+
+- **`Y` is conclusive** — the server is provably parsing the Bearer token.
+- **`N` / `UNKNOWN` proves nothing.** A server can **silently Base64-decode the
+  token — reaching the exact vulnerable code path — and return an identical
+  response** (the token is optional on an anonymous endpoint). That decode is
+  invisible from outside. **`N` means "cannot tell," never "safe."**
+
+So a clean remote result **does not clear a host**. The correct action is to
+**patch every in-range JDK now** (or apply the `-XX:-UseBASE64Intrinsics`
+stopgap), and confirm on the host with `--local` + `check_classpath.py`. The
+definitive answer always lives on the host, never in a remote probe.
+
 ## What the bug actually is
 
 - **CVE-2026-114938** ("Java4Shell"). **Not** Log4Shell, **not** Spring4Shell,
@@ -52,13 +68,14 @@ for the patch):
 
 ### Reading the results
 
-- **Reachable = Y** → the endpoint parses the Bearer token; the decode path is
-  reachable pre-auth. Investigate + patch. Not proof of RCE by itself.
-- **Reachable = N** → header ignored on that path. Still patch — other inputs
-  can reach the decoder.
-- **Reachable = ?** → the no-token status itself varied between calls; re-run
-  with more `--samples` or against a quieter target.
-- **Definitive verdict** is the `--local` check: in-range build **AND** AVX-512.
+- **PARSED: Y (conclusive)** → the token provably changes the response (status
+  change or `WWW-Authenticate: Bearer`). The decode path is reachable pre-auth.
+  Not proof of RCE by itself — run `--local` on the host and patch.
+- **PARSED: UNKNOWN** → identical response with and without the token, or a
+  noisy baseline. **This is not a negative.** Silent decoding is
+  indistinguishable from no decoding. Patch anyway.
+- **Definitive verdict** is the `--local` check on the host: in-range build
+  **AND** AVX-512. Remote results never clear a host.
 
 **Note on dynamic Pix payloads:** `cob`/`cobv` responses embed a server
 timestamp (`calendario.apresentacao`) and are **re-signed on every request**, so

@@ -2,9 +2,13 @@
 """
 Java4Shell (CVE-2026-114938) — batch reachability sweep. DEFENSIVE / non-destructive.
 
-Reads a list of URLs (one per line, '#' comments allowed) and prints a Y/N
-table of whether each endpoint parses an Authorization: Bearer token.
+Reads a list of URLs (one per line, '#' comments allowed) and prints a
+Y / UNKNOWN table of whether sending a Bearer token changes each response.
 Sends only harmless, well-formed Base64 — never the exploit payload.
+
+NOT CONCLUSIVE: Y means the token is provably parsed; UNKNOWN proves nothing
+(a server can silently Base64-decode the token and reply identically). Patch
+in-range JDKs now regardless of what this prints.
 
 Usage:
   python3 sweep.py endpoints.txt
@@ -57,11 +61,12 @@ def probe(url, samples=3):
     t_www = _www_auth_bearer(t_headers)
 
     if len(ctrl_statuses) > 1:
-        return "?", f"{sorted(ctrl_statuses)}", t_status, "no-token status varied"
+        return "UNKNOWN", f"{sorted(ctrl_statuses)}", t_status, "baseline noisy"
     if (t_status != b_status) or (t_www and not ctrl_www):
         reason = "WWW-Authenticate: Bearer" if (t_www and not ctrl_www) else "status change"
         return "Y", b_status, t_status, reason
-    return "N", b_status, t_status, ""
+    # Identical response proves nothing: silent decode looks the same. Not "safe".
+    return "UNKNOWN", b_status, t_status, "identical resp (not conclusive)"
 
 
 def main():
@@ -77,7 +82,7 @@ def main():
         urls = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
 
     rows = []
-    print(f"{'REACHABLE':<10} {'no-tok':<7} {'w-tok':<7} URL")
+    print(f"{'PARSED':<10} {'no-tok':<7} {'w-tok':<7} URL")
     print("-" * 70)
     for url in urls:
         verdict, bs, ts, note = probe(url)
@@ -92,8 +97,11 @@ def main():
         print(f"\nWrote {csv_out}")
 
     ys = sum(1 for r in rows if r[1] == "Y")
-    print(f"\n{ys}/{len(rows)} endpoints parse the Bearer token (REACHABLE=Y). "
-          "Verify JDK build + AVX-512 on those hosts, then patch.")
+    unk = sum(1 for r in rows if r[1] == "UNKNOWN")
+    print(f"\nY={ys} (conclusively parse the token)  UNKNOWN={unk} (NOT safe — "
+          "cannot tell from outside).")
+    print("This sweep does not clear anything. Patch every in-range JDK now and "
+          "confirm with --local + check_classpath.py on each host.")
 
 
 if __name__ == "__main__":

@@ -13,8 +13,10 @@ patching.
 - For third-party systems (banks, PSPs, vendors, partners), do **not** probe.
   Use **responsible disclosure**: contact the organization's security team,
   share your findings, and let them run the local checks on their own hosts.
-- The reachability probe only tells you whether an endpoint parses an
-  `Authorization: Bearer` header. It is **not** proof of exploitability.
+- The remote probe is **not conclusive**. A `Y` proves the Bearer token is
+  parsed; an `N`/`UNKNOWN` proves nothing, because a server can silently decode
+  the token and reply identically. Never treat a clean remote result as
+  "not exposed" — **patch in-range JDKs now** regardless.
 
 ## Definitive verdict
 

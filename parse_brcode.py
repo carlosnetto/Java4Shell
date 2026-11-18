@@ -166,8 +166,9 @@ def main():
         print(f"Dynamic Pix URL : {full_url}")
         print(f"Next: python3 java4shell_check.py {full_url} --samples 5")
         print("      (--samples takes a baseline since the payload re-signs each "
-              "call; verdict is Y = bearer path parses the token / "
-              "N = ignored / ? = inconclusive, re-run with more --samples)")
+              "call. Only Y is conclusive = token provably parsed; UNKNOWN proves "
+              "nothing -- a silent decode looks identical. Patch in-range JDKs "
+              "regardless; confirm with --local + check_classpath.py.)")
     else:
         print("Dynamic Pix URL : (none found — this may be a STATIC Pix QR, "
               "which carries a key/amount inline and has no callback URL)")
