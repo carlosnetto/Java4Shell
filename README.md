@@ -56,7 +56,17 @@ for the patch):
   reachable pre-auth. Investigate + patch. Not proof of RCE by itself.
 - **Reachable = N** → header ignored on that path. Still patch — other inputs
   can reach the decoder.
+- **Reachable = ?** → the no-token status itself varied between calls; re-run
+  with more `--samples` or against a quieter target.
 - **Definitive verdict** is the `--local` check: in-range build **AND** AVX-512.
+
+**Note on dynamic Pix payloads:** `cob`/`cobv` responses embed a server
+timestamp (`calendario.apresentacao`) and are **re-signed on every request**, so
+the response body changes on its own. The probe therefore does **not** use body
+differences as a signal — it takes a control baseline of several no-token calls
+(`--samples`, default 3) and decides only on the HTTP **status code** and a
+**`WWW-Authenticate: Bearer`** header. (Thanks to the reviewer who caught the
+original body-diff false positive against a re-signing endpoint.)
 
 ## Sources
 

@@ -15,8 +15,14 @@ questions for YOUR OWN server:
 A remote "Y" means: investigate/patch. It does NOT by itself prove RCE —
 that also needs the LOCAL conditions true on the host serving the URL.
 
+Dynamic Pix payloads re-sign themselves on every request (the body changes on
+its own), so body differences are NOT used as a signal. The probe takes a
+control baseline of several no-token calls, then trusts only the HTTP status
+code and a WWW-Authenticate: Bearer header to decide if the token is parsed.
+
 Usage:
   python3 java4shell_check.py https://your-qr-endpoint.example/pix/abc123
+  python3 java4shell_check.py https://host/pix/x --samples 5   # more baseline calls
   python3 java4shell_check.py --local          # check this host's JVM + CPU
 """
 
@@ -39,45 +45,82 @@ def _get(url, headers):
     ctx = ssl.create_default_context()
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as r:
-            return r.status, r.read(4096)
+            return r.status, r.read(4096), dict(r.headers)
     except urllib.error.HTTPError as e:
-        return e.code, (e.read(4096) if e.fp else b"")
+        return e.code, (e.read(4096) if e.fp else b""), dict(e.headers or {})
     except Exception as e:
-        return None, str(e).encode()
+        return None, str(e).encode(), {}
 
 
-def check_remote(url):
-    # Baseline: no auth header at all (your normal, intended request).
-    base_status, base_body = _get(url, {"User-Agent": "j4s-reachability-check"})
-    if base_status is None:
-        print(f"ERROR  could not reach {url}: {base_body.decode(errors='replace')}")
+def _www_auth_bearer(headers):
+    """Return the WWW-Authenticate value if it advertises Bearer, else None."""
+    for k, v in headers.items():
+        if k.lower() == "www-authenticate" and "bearer" in v.lower():
+            return v
+    return None
+
+
+def check_remote(url, samples=3):
+    """Reachability probe robust to self-changing (re-signed) payloads.
+
+    Dynamic Pix payloads embed a server timestamp and are re-signed every call,
+    so the BODY changes on its own — it is NOT a usable signal. We first take a
+    control baseline of several no-token calls to measure that natural variance,
+    then rely on signals that do NOT move with the payload: the HTTP status code
+    and a WWW-Authenticate: Bearer header (emitted by Spring's bearer filter when
+    it rejects a token). Body is used only if the baseline proves it is stable.
+    """
+    hdr = {"User-Agent": "j4s-reachability-check"}
+
+    # --- Control: repeated no-token calls to learn natural variance. ---
+    controls = [_get(url, hdr) for _ in range(max(2, samples))]
+    if controls[0][0] is None:
+        print(f"ERROR  could not reach {url}: "
+              f"{controls[0][1].decode(errors='replace')}")
         return
+    ctrl_statuses = {c[0] for c in controls}
+    ctrl_bodies = {c[1] for c in controls}
+    body_volatile = len(ctrl_bodies) > 1
+    status_stable = len(ctrl_statuses) == 1
+    ctrl_status = controls[0][0]
+    ctrl_www = _www_auth_bearer(controls[0][2])
 
-    # Same request, but WITH a syntactically valid junk Bearer token.
-    bearer_status, bearer_body = _get(
-        url,
-        {
-            "User-Agent": "j4s-reachability-check",
-            "Authorization": f"Bearer {BENIGN_BEARER}",
-        },
+    # --- Probe: one call WITH a syntactically valid junk Bearer token. ---
+    t_status, t_body, t_headers = _get(
+        url, {**hdr, "Authorization": f"Bearer {BENIGN_BEARER}"}
     )
+    t_www = _www_auth_bearer(t_headers)
 
-    changed = (bearer_status != base_status) or (bearer_body != base_body)
+    print(f"  no-token  : status {sorted(ctrl_statuses)} over {len(controls)} calls"
+          f"  (body {'VARIES on its own' if body_volatile else 'stable'})")
+    print(f"  w/ token  : status {t_status}")
 
-    print(f"  no-token  : HTTP {base_status}")
-    print(f"  w/ token  : HTTP {bearer_status}")
-    if changed:
-        print("REACHABLE: Y  -- the server's response CHANGED when a Bearer "
-              "token was present.\n"
-              "          Something is parsing the Authorization header "
-              "(likely Spring Security's bearer filter).\n"
-              "          The vulnerable Base64-decode path may be reachable "
-              "pre-auth. Verify the LOCAL check on the host, then patch.")
+    signals = []
+    if status_stable and t_status != ctrl_status:
+        signals.append(f"status changed {ctrl_status} -> {t_status} when the token "
+                       "was sent (control status was stable)")
+    if t_www and not ctrl_www:
+        signals.append(f'response added "WWW-Authenticate: {t_www}" — a bearer '
+                       "filter is actively parsing the token")
+    if not body_volatile and t_body != controls[0][1]:
+        signals.append("body changed vs a stable baseline when the token was sent")
+
+    if signals:
+        print("REACHABLE: Y  -- the Bearer-parsing path appears active:")
+        for s in signals:
+            print(f"            - {s}")
+        print("          Verify the --local check on the host, then patch.")
+    elif not status_stable:
+        print("REACHABLE: ?  -- the no-token status itself varied "
+              f"{sorted(ctrl_statuses)}; result inconclusive.\n"
+              "          Re-run against a quieter target or raise --samples.")
     else:
-        print("REACHABLE: N  -- identical response with and without the token; "
-              "this endpoint appears to ignore the Authorization header.\n"
-              "          (Still patch the JDK — other inputs may decode "
-              "Base64. This only clears THIS path.)")
+        note = ("          (Body changes on its own, so it was ignored; verdict "
+                "is based on status + WWW-Authenticate.)\n") if body_volatile else ""
+        print("REACHABLE: N  -- status is unchanged and no bearer-auth header "
+              "appeared with the token.\n" + note +
+              "          This endpoint does not appear to parse the Authorization "
+              "header. Still patch the JDK — other inputs may decode Base64.")
 
 
 def check_local():
@@ -114,10 +157,14 @@ def check_local():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
         print(__doc__)
         sys.exit(0)
-    if sys.argv[1] == "--local":
+    if args[0] == "--local":
         check_local()
     else:
-        check_remote(sys.argv[1])
+        samples = 3
+        if "--samples" in args:
+            samples = int(args[args.index("--samples") + 1])
+        check_remote(args[0], samples=samples)

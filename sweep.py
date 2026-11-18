@@ -27,22 +27,41 @@ def _get(url, headers):
     ctx = ssl.create_default_context()
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as r:
-            return r.status, r.read(4096)
+            return r.status, r.read(4096), dict(r.headers)
     except urllib.error.HTTPError as e:
-        return e.code, (e.read(4096) if e.fp else b"")
+        return e.code, (e.read(4096) if e.fp else b""), dict(e.headers or {})
     except Exception as e:
-        return None, str(e).encode()
+        return None, str(e).encode(), {}
 
 
-def probe(url):
-    b_status, b_body = _get(url, {"User-Agent": "j4s-sweep"})
-    if b_status is None:
-        return "ERR", b_status, None, b_body.decode(errors="replace")[:80]
-    t_status, t_body = _get(
+def _www_auth_bearer(headers):
+    for k, v in headers.items():
+        if k.lower() == "www-authenticate" and "bearer" in v.lower():
+            return v
+    return None
+
+
+def probe(url, samples=3):
+    # Control baseline: repeated no-token calls. Dynamic Pix payloads re-sign
+    # themselves, so BODY is ignored; only status + WWW-Authenticate count.
+    controls = [_get(url, {"User-Agent": "j4s-sweep"}) for _ in range(max(2, samples))]
+    if controls[0][0] is None:
+        return "ERR", None, None, controls[0][1].decode(errors="replace")[:60]
+    ctrl_statuses = {c[0] for c in controls}
+    ctrl_www = _www_auth_bearer(controls[0][2])
+    b_status = controls[0][0]
+
+    t_status, _t_body, t_headers = _get(
         url, {"User-Agent": "j4s-sweep", "Authorization": f"Bearer {BENIGN_BEARER}"}
     )
-    changed = (t_status != b_status) or (t_body != b_body)
-    return ("Y" if changed else "N"), b_status, t_status, ""
+    t_www = _www_auth_bearer(t_headers)
+
+    if len(ctrl_statuses) > 1:
+        return "?", f"{sorted(ctrl_statuses)}", t_status, "no-token status varied"
+    if (t_status != b_status) or (t_www and not ctrl_www):
+        reason = "WWW-Authenticate: Bearer" if (t_www and not ctrl_www) else "status change"
+        return "Y", b_status, t_status, reason
+    return "N", b_status, t_status, ""
 
 
 def main():
