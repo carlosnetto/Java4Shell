@@ -15,8 +15,9 @@ Usage:
   python3 parse_brcode.py --url-only "000201..."    # just the https URL
   python3 parse_brcode.py --file qr.txt             # read payload from a file
 
-Pipe into the exposure checker:
-  python3 parse_brcode.py --url-only "000201..." | xargs python3 java4shell_check.py
+Pipe into the exposure checker (dynamic Pix payloads re-sign themselves, so use
+--samples to take a stable baseline; read the verdict as Y/N/?):
+  python3 parse_brcode.py --url-only "000201..." | xargs -I{} python3 java4shell_check.py {} --samples 5
 """
 
 import sys
@@ -163,7 +164,10 @@ def main():
     print()
     if full_url:
         print(f"Dynamic Pix URL : {full_url}")
-        print("Next: python3 java4shell_check.py " + full_url)
+        print(f"Next: python3 java4shell_check.py {full_url} --samples 5")
+        print("      (--samples takes a baseline since the payload re-signs each "
+              "call; verdict is Y = bearer path parses the token / "
+              "N = ignored / ? = inconclusive, re-run with more --samples)")
     else:
         print("Dynamic Pix URL : (none found — this may be a STATIC Pix QR, "
               "which carries a key/amount inline and has no callback URL)")
